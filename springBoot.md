@@ -204,7 +204,16 @@
 
 
 
-### 测试类中启动web环境
+### web环境模拟测试
+
+
+
+
+
+
+
+
+#### 1.测试类中启动web环境
 
 
 
@@ -213,3 +222,118 @@
 > `public class WebTest {`
 >
 > `}`
+
+
+
+#### 2.发送虚拟请求
+
+* 开启虚拟MVC调用
+==@AutoConfigureMockMvc==
+> `public class WebTest {`
+> `}`
+* 注入虚拟MVC调用对象
+>==@Autowired==
+>`MockMvc mvc`
+
+* 创建虚拟请求，当前访问url
+
+> `MockHttpServletRequestBuilder builder = MockMvcRequestBuilders.`*get/post/delete...("/books");*
+
+* 执行请求
+
+> `mvc.perform(builder);`
+
+
+
+
+
+#### 3.匹配响应状态
+
+
+
+* 定义执行状态匹配器   
+
+>  `StatusResultMatchers status = MockMvcResultMatchers.status();`
+
+* 定义预期执行状态   
+
+>  `ResultMatcher ok = status.isOk();`
+
+* 使用本次真实执行结果与预期结果进行比对    
+
+> `mvc.perform(builder).andExpect(ok);`
+
+
+
+#### 4.匹配请求体
+
+
+
+* 定义执行结果匹配器    
+
+> `ContentResultMatchers content = MockMvcResultMatchers.content();`
+> `ContentResultMatchers content = MockMvcResultMatchers.<u>content();`
+
+* 定义预期执行结果
+
+> `ResultMatcher result = content().string("`*XXXXXX*`");`（匹配字符串）
+>
+> `ResultMatcher result = content.json("`*XXXXXXXXX*"`);`(匹配json)
+
+* 使用本次真实执行结果与预期结果进行比对
+
+> `mvc.perform(builder).andExpect(result);`
+
+
+
+
+
+#### 5.匹配响应头
+
+>  `HeaderResultMatchers header = MockMvcResultMatchers.header();`
+>
+> `ResultMatcher resultHeader = header.string("Content-Type", "application/json");`
+>
+> `mvc.perform(builder).andExpect(resultHeader);}`
+> 
+
+
+
+### 数据层测试回滚
+
+
+
+
+
+* 为测试用例添加事务，SpringBoot会对测试用例对应的事务提交操作进行回滚
+
+> `@SpringBootTest`
+> ==@Transactional==
+> `public class DaoTest {`
+> `}`
+
+* 如果想在测试用例中提交事务，可以通过@Rollback注解设置
+> `@SpringBootTest`
+> `@Transactional`
+> ==@Rollback(false)==
+> `public class DaoTest {`
+> `}`
+
+
+
+
+
+### 测试用例数据设定
+
+
+
+* 测试用例数据通常采用随机值进行测试，使用SpringBoot提供的随机数为其赋值
+
+yaml文件中:
+
+*XXX*:${random.*XXX*}
+
+*XXX*:${random.int(10)}表示10以内随机数
+
+*XXX*:${random.int(5,10)}表示5到10随机数
+
