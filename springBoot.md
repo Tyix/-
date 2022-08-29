@@ -34,10 +34,12 @@
 
 自定义：(appliction.yml)
 
->`spring:
-	    dovtools:
-	        resort:
-	          exlucde:static/**,config/application.yml ....`
+```
+spring:
+ dovtools:
+	resort:
+	 exlucde:static/**,config/application.yml 
+```
 
 
 
@@ -48,18 +50,20 @@
 **依据配置优先顺序**
 
 1.application.yml
-
->`spring:
-	    dovtools:
-	      resort:
-	        enabled:false`
+```
+spring:
+ dovtools:
+   resort:
+	  enabled:false
+```
 
 2.main函数
->`main(String[] args){
+```
+main(String[] args){
 		System.setProperty("spring.devtools.restart.enabled","false");
 		Application.run(application.class);
-}`
-
+}
+```
 
 
 
@@ -90,11 +94,12 @@
 
 
 解除使用@ConfigurationProperties注释警告
->`        <dependency>
+```
+        <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-configuration-processor</artifactId>
-       </dependency> `
-
+       </dependency> 
+```
 
 
 
@@ -105,11 +110,12 @@
 
 >==@DurationUnit==*(ChronoUnit.XXX)*
 >
->private Duration TimeOut;`
+>private Duration TimeOut;
+
 
 空间
 
->==@DataSizeUnit==*(**DataUnit.`*XXX*`)*
+>==@DataSizeUnit==*(DataUnit.XXX)*
 >
 >private DataSize DataSize;`
 
@@ -336,4 +342,118 @@ yaml文件中:
 *XXX*:${random.int(10)}表示10以内随机数
 
 *XXX*:${random.int(5,10)}表示5到10随机数
+
+
+
+## 4.数据层解决方案
+
+
+
+### SQL
+
+
+
+
+
+#### 数据源配置
+
+SpringBoot提供了3种内嵌的数据源对象供开发者选择
+
+* *HikariCP*：默认内置数据源对象
+* *Tomcat提供DataSource：*HikariCP不可用的情况下，且在web环境中，将使用tomcat服务器配置的数据源对象
+* *Commons DBCP*：Hikari不可用，tomcat数据源也不可用，将使用dbcp数据源
+
+
+
+
+
+#### 持久化解决方案
+
+
+
+* SpringBoot内置*JdbcTemplate*持久化解决方案（使用JdbcTemplate需要导入spring-boot-starter-jdbc）
+
+
+
+
+
+#### 内嵌数据库
+
+
+
+SpringBoot提供了3种内嵌数据库供开发者选择，提高开发测试效率
+
+* H2
+* HSQL
+* Derby
+
+*H2数据库线上运行时请务必关闭*
+
+
+
+
+
+### NoSQL
+
+
+
+#### Redis
+
+
+
+##### 1.SpringBoot整合Redis
+
+* 入导redis对应的starter
+
+```
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-data-redis</artifactId>
+</dependency>
+```
+
+* 配置Redis(采用默认配置)
+
+```
+spring:
+  redis:
+    host: locahost
+    port: 6379
+```
+
+* 提供操作Redis接口对象RedisTemplate.*opsXXXX*（获取各种数据类型操作接口）
+
+
+
+* RedisTemplate以对象作为key和value，内部对数据进行序列化
+* StringRedisTemplate以字符串作为key和value，与Redis客户端操作等效（常用）
+
+
+
+##### 2. lettcus与jedis区别
+
+spring boot默认使用*lettcus*
+
+* *jedis*连接Redis服务器是直连模式，当多线程模式下使用jedis会==存在线程安全问题==，解决方案可以通过配置连接池使每个连接专用，这样整体性能就大受影响。
+* *lettcus*基于Netty框架进行与Redis服务器连接，底层设计中采用StatefulRedisConnection。 StatefulRedisConnection自身是线程安全的，可以保障并发访问安全问题，所以一个连接可以被多线程复用。当然lettcus也支持多连接实例一起工作
+
+
+
+#### Mongodb
+
+
+
+* MongoDB是一个开源、高性能、无模式的文档型数据库。NoSQL数据库产品中的一种，是最像关系型数据库的非关系型数据库 
+
+
+
+* SpringBoot整合Mongodb
+
+  1. 导入Mongodb对应的starter
+
+  2. 配置mongodb访问uri
+
+  3. 提供操作Mongodb接口对象MongoTemplate
+
+
 
