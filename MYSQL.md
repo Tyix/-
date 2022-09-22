@@ -821,7 +821,23 @@ START TRANSACTION 或 BEGIN ;
 
 * 持久性（Durability）：事务一旦提交或回滚，它对数据库中的数据的改变就是永久的。  
 
+  
+
   上述就是事务的四大特性，简称*ACID*  
+
+  
+
+  而对于这四大特性，实际上分为两个部分:
+
+  ![image-20220922204257121](C:\Users\22862\Desktop\笔记\MYSQL.assets\image-20220922204257121.png)
+
+  
+
+  ​	其中的**原子性、一致性、持久性**，实际上是由InnoDB中的两份日志来保证的，一份是*redo log*日志，一份是*undo log*日志。 
+
+  ​	而**隔离性**是通过数据库的*锁*，加上*MVCC*来保证的。  
+
+  
 
   
 
@@ -830,7 +846,9 @@ START TRANSACTION 或 BEGIN ;
   ### 并发事务问题  
 
 * 赃读：一个事务读到另外一个事务还没有提交的数据  
+
 * 不可重复读：一个事务先后读取同一条记录，但两次读取的数据不同，称之为不可重复读  
+
 * 幻读：一个事务按照条件查询数据时，没有对应的数据行，但是在插入数据时，又发现这行数据
   已经存在，好像出现了 "幻影"。  
 
@@ -2875,4 +2893,574 @@ DROP TRIGGER [schema_name.]trigger_name ; -- 如果没有指定 schema_name，�
 
 
 ## 锁  
+
+
+
+* MySQL中的锁，按照锁的粒度分，分为以下三类：  
+  * 全局锁：锁定数据库中的所有表。  
+  * 表级锁：每次操作锁住整张表。  
+  * 行级锁：每次操作锁住对应的行数据。  
+
+
+
+### 全局锁  
+
+
+
+​	对整个数据库实例加锁，加锁后整个实例就处于只读状态 。
+
+​	其典型的使用场景是做全库的逻辑备份，对所有的表进行锁定，从而获取一致性视图，保证数据的完整性。  
+
+
+
+**语法**  
+
+
+
+* 加全局锁  
+
+~~~mysql
+flush tables with read lock ;
+~~~
+
+
+
+* 释放锁  
+
+~~~mysql
+unlock tables ;
+~~~
+
+
+
+* 全局锁存在问题：  
+
+  * 如果在主库上备份，那么在备份期间都不能执行更新 
+
+  * 如果在从库上备份，那么在备份期间从库不能执行主库同步过来的二进制日志（binlog），会导致主从延迟。  
+
+
+
+> 在InnoDB引擎中，我们可以在备份时加上参数 --single-transaction 参数来完成不加锁的一致性数据备份  
+
+
+
+### 表级锁  
+
+
+
+​	锁定粒度大，发生锁冲突的概率最高，并发度最低。应用在MyISAM、InnoDB、BDB等存储引擎中。  
+
+
+
+* 对于表级锁，主要分为以下三类：  
+  * 表锁  
+  * 元数据锁（meta data lock，MDL）  
+  * 意向锁  
+
+
+
+#### 表锁  
+
+
+
+* 对于表锁，分为两类：  
+  * 表共享读锁（read lock）  *阻塞写*  
+  * 表独占写锁（write lock）  *阻塞读和写*  
+
+
+
+
+
+**语法：**  
+
+
+
+* 加锁：  
+
+~~~mysql
+lock tables 表名... read/write。
+~~~
+
+
+
+**释放锁：**  
+
+~~~mysql
+unlock tables / 客户端断开连接 。
+~~~
+
+
+
+#### 元数据锁  
+
+
+
+元数据锁 （meta data lock）简写MDL。  （避免DML与DDL冲突，保证读写的正确性。）
+
+
+
+​	MDL加锁过程是系统自动控制，无需显式使用，在访问一张表的时候会自动加上。
+
+​	MDL锁主要作用是维护表元数据的数据一致性，在表上有活动事务的时候，不可以对元数据进行写入操作。
+
+​	（元数据可以简单理解为就是一张表的表结构  ）
+
+
+
+​	在MySQL5.5中引入了MDL，当对一张表进行增删改查的时候，加MDL读锁(共享)；当对表结构进行变更操作的时候，加MDL写锁(排他)。  
+
+
+
+
+
+| 对应SQL                                         | 锁类型                                  | 说明                                               |
+| ----------------------------------------------- | --------------------------------------- | -------------------------------------------------- |
+| lock tables xxx read / write                    | SHARED_READ_ONLY / SHARED_NO_READ_WRITE |                                                    |
+| select 、select ... lock in share mode          | SHARED_READ                             | 与SHARED_READ、 SHARED_WRITE兼容，与 EXCLUSIVE互斥 |
+| insert 、update、 delete、select ... for update | SHARED_WRITE                            | 与SHARED_READ、 SHARED_WRITE兼容，与 EXCLUSIVE互斥 |
+| alter table ...                                 | EXCLUSIVE  【MDL写锁(排他)】            | 与其他的MDL都互斥                                  |
+
+
+
+
+
+查看数据库中的元数据锁情况：  
+
+~~~mysql
+select object_type,object_schema,object_name,lock_type,lock_duration from
+performance_schema.metadata_locks ;
+~~~
+
+
+
+#### 意向锁  
+
+
+
+​	为了避免DML在执行时，加的行锁与表锁的冲突，在InnoDB中引入了意向锁，使得表锁不用检查每行数据是否加锁，使用意向锁来减少表锁的检查。  
+
+
+
+* 分类：
+  * 意向共享锁(IS): 与 表锁共享锁(read)兼容，与表锁排他锁(write)互斥。  
+  * 意向排他锁(IX): 与表锁共享锁(read)及排他锁(write)都互斥，意向锁之间不会互斥。  
+
+ 语法：
+
+
+
+* 意向共享锁(IS):
+
+~~~mysql
+select ... lock in share mode
+~~~
+
+
+
+* 意向排他锁(IX):  
+
+~~~mysql
+insert、update、delete、select...for update
+~~~
+
+
+
+一旦事务提交了，意向共享锁、意向排他锁，都会自动释放。  
+
+
+
+* 可以通过以下SQL，查看意向锁及行锁的加锁情况：  
+
+~~~mysql
+select object_schema,object_name,index_name,lock_type,lock_mode,lock_data from
+performance_schema.data_locks;
+~~~
+
+
+
+### 行级锁  
+
+
+
+​	锁定粒度最小，发生锁冲突的概率最低，并发度最高。
+
+​	行锁是通过对**索引**上的索引项加锁来实现的，而不是对记录加的锁。  
+
+
+
+对于行级锁，主要分为以下三类：  
+
+
+
+* 行锁（Record Lock）：
+
+锁定单个行记录的锁，防止其他事务对此行进行update和delete。在RC、RR隔离级别下都支持。   
+
+![image-20220922190326125](C:\Users\22862\Desktop\笔记\MYSQL.assets\image-20220922190326125.png)
+
+
+
+* 间隙锁（Gap Lock）：  
+
+锁定索引记录间隙（不含该记录），确保索引记录间隙不变，防止其他事务在这个间隙进行insert，产生幻读。在RR隔离级别下都支持。  
+
+![image-20220922190556370](C:\Users\22862\Desktop\笔记\MYSQL.assets\image-20220922190556370.png)
+
+
+
+* 临键锁（Next-Key Lock）：  
+
+行锁和间隙锁组合，同时锁住数据，并锁住数据前面的间隙Gap。在RR隔离级别下支持。  
+
+![image-20220922190650068](C:\Users\22862\Desktop\笔记\MYSQL.assets\image-20220922190650068.png)
+
+
+
+
+
+#### 行锁  
+
+
+
+InnoDB实现了以下两种类型的行锁：  
+
+* 共享锁（S）：允许一个事务去读一行，阻止其他事务获得相同数据集的排它锁。  
+* 排他锁（X）：允许获取排他锁的事务更新数据，阻止其他事务获得相同数据集的共享锁和排他锁。  
+
+![image-20220922191215368](C:\Users\22862\Desktop\笔记\MYSQL.assets\image-20220922191215368.png)
+
+
+
+
+
+| SQL                           | 行锁类型    | 说明                                     |
+| ----------------------------- | ----------- | ---------------------------------------- |
+| INSERT ...                    | 排他锁      | 自动加锁                                 |
+| UPDATE ...                    | 排他锁      | 自动加锁                                 |
+| DELETE ...                    | 排他锁      | 自动加锁                                 |
+| SELECT（正常）                | 不加任何 锁 |                                          |
+| SELECT ... LOCK IN SHARE MODE | 共享锁      | 需要手动在SELECT之后加LOCK IN SHARE MODE |
+| SELECT ... FOR UPDATE         | 排他锁      | 需要手动在SELECT之后加FOR UPDATE         |
+
+
+
+* 针对唯一索引进行检索时，对已存在的记录进行等值匹配时，将会自动优化为行锁  
+* **InnoDB的行锁是针对于索引加的锁，不通过索引条件检索数据，那么InnoDB将对表中的所有记录加锁，此时就会升级为表锁。**  
+
+
+
+* 查看意向锁及行锁的加锁情况：  
+
+~~~mysql
+select object_schema,object_name,index_name,lock_type,lock_mode,lock_data from
+performance_schema.data_locks;
+~~~
+
+
+
+#### 间隙锁&临键锁  
+
+
+
+默认情况下，InnoDB在 ==REPEATABLE READ==事务隔离级别运行，InnoDB使用==临键锁（Next-Key Lock）==进行搜索和索引扫描，以防止幻读  
+
+
+
+* 索引上的等值查询(唯一索引)，给不存在的记录加锁时, 优化为间隙锁 。  
+* 索引上的等值查询(非唯一普通索引)，向右遍历时最后一个值不满足查询需求时，临键锁退化为间隙锁。 
+
+* 索引上的范围查询(唯一索引)--会访问到不满足条件的第一个值为止。  
+
+> 间隙锁唯一目的是防止其他事务插入间隙。间隙锁可以共存，一个事务采用的间隙锁不会阻止另一个事务在同一间隙上采用间隙锁。  
+
+
+
+## InnoDB引擎  
+
+
+
+### 逻辑存储结构  
+
+![image-20220922194456189](C:\Users\22862\Desktop\笔记\MYSQL.assets\image-20220922194456189.png)
+
+
+
+* 表空间  
+
+​	表空间是InnoDB存储引擎逻辑结构的最高层， 如果用户启用了参数 innodb_file_per_table(在8.0版本中默认开启) ，则每张表都会有一个表空间（xxx.ibd），一个mysql实例可以对应多个表空间，用于存储记录、索引等数据。  
+
+* 段 
+
+​	段，分为数据段（Leaf node segment）、索引段（Non-leaf node segment）、回滚段（Rollback segment），InnoDB是索引组织表，数据段就是B+树的叶子节点， 索引段即为B+树的非叶子节点。段用来管理多个Extent（区）。
+
+* 区  
+
+​	区，表空间的单元结构，每个区的大小为1M。 默认情况下， InnoDB存储引擎页大小为16K， 即一个区中一共有64个连续的页。  
+
+* 页  
+
+​	页，是InnoDB 存储引擎磁盘管理的最小单元，每个页的大小默认为 16KB。为了保证页的连续性，InnoDB 存储引擎每次从磁盘申请 4-5 个区。  
+
+* 行  
+
+​	行，InnoDB 存储引擎数据是按行进行存放的。  
+
+
+
+
+
+* 在行中，默认有两个隐藏字段：  
+  * *Trx_id*：每次对某条记录进行改动时，都会把对应的事务id赋值给trx_id隐藏列。  
+  * *Roll_pointer*：每次对某条引记录进行改动时，都会把旧的版本写入到undo日志中，然后这个隐藏列就相当于一个指针，可以通过它来找到该记录修改前的信息。  
+
+
+
+### 内存结构
+
+
+
+![image-20220922195629563](C:\Users\22862\Desktop\笔记\MYSQL.assets\image-20220922195629563.png)
+
+
+
+
+
+*  在内存结构中，主要分为这么四大块儿： *Buffer Pool、Change Buffer、AdaptiveHash Index、Log Buffer。*
+
+
+
+* *Buffer Pool*  （缓冲池）
+  * **作用**：弥补硬盘和内存I/O效率的差值，避免每次访问都进行磁盘I/O。  
+  
+  * **内容**：在InnoDB的缓冲池中不仅缓存了索引页和数据页，还包含了undo页、插入缓存、自适应哈希索引以及InnoDB的锁信息等等。  
+  
+  * **结构**：缓冲池以Page页为单位，底层采用链表数据结构管理Page。根据状态，将Page分为三种类型：  
+    * free page：空闲page，未被使用  
+    * clean page：被使用page，数据没有被修改过。  
+    * dirty page：脏页，被使用page，数据被修改过，当中数据与磁盘的数据产生了不一致  
+
+
+
+> 在专用服务器上，通常将多达80％的物理内存分配给缓冲池 。参数设置： 
+>
+> ~~~mysql
+> show variableslike 'innodb_buffer_pool_size';  
+> ~~~
+
+
+
+
+
+* *Change Buffer* （更改缓冲区 -->针对于非唯一二级索引页 ）
+
+  * **存在原因**：二级索引通常是非唯一的，并且以相对随机的顺序插入二级索引。删除和更新可能会影响索引树中不相邻的二级索引页 ，如果每一次都操作磁盘，会造成大量的磁盘IO。  
+
+  * **作用**：增、删、改操作数据不在*Buffer Pool* 时，将数据变更存在*Change Buffer*。在未来数据被读取时，将数据合并恢复到Buffer Pool中，再将合并后的数据刷新到磁盘中。  （减少磁盘IO ）
+
+  * **内容**：被增、删、改数据
+
+
+
+
+
+* *Adaptive Hash Index* （自适应hash索引  ）
+  * **作用**：优化对Buffer Pool数据的查询。  
+
+> 自适应哈希索引，无需人工干预，是系统根据情况自动完成。  
+
+
+
+
+
+* *Log Buffer* （日志缓冲区  ）
+
+  * **内容**：保存要写入到磁盘中的log日志数据（redo log 、undo log）
+
+  * **作用**：默认大小为 16MB ，定期刷新到磁盘中。如果需要更新、插入或删除许多行的事务，增加日志缓冲区的大小可以节省磁盘 I/O。  
+
+
+
+### 磁盘结构  
+
+.......
+
+
+
+* *System Tablespace*  	
+* *File-Per-Table Tablespaces*  
+* *General Tablespaces*  
+* *Undo Tablespaces*  
+* *Temporary Tablespaces*  
+* *Doublewrite Buffer Files*  
+* *Redo Log*  
+
+
+
+### 后台线程  
+
+
+
+InnoDB的后台线程分为4类，分别是：
+
+*Master Thread 、IO Thread、Purge Thread、Page Cleaner Thread。*  
+
+
+
+* Master Thread 
+
+​	核心后台线程，负责调度其他线程，还负责将缓冲池中的数据异步刷新到磁盘中, 保持数据的一致性，还包括脏页的刷新、合并插入缓存、undo页的回收 。  
+
+
+
+* IO Thread  
+
+​	在InnoDB存储引擎中大量使用了AIO来处理IO请求, 这样可以极大地提高数据库的性能，而IO Thread主要负责这些IO请求的回调。  
+
+| 线程类型             | 默认个数 | 职责                         |
+| -------------------- | -------- | ---------------------------- |
+| Read thread          | 4        | 负责读操作                   |
+| Write thread         | 4        | 负责写操作                   |
+| Log thread           | 1        | 负责将日志缓冲区刷新到磁盘   |
+| Insert buffer thread | 1        | 负责将写缓冲区内容刷新到磁盘 |
+
+
+
+* Purge Thread  
+
+​	主要用于回收事务已经提交了的undo log，在事务提交之后，undo log可能不用了，就用它来回收。  
+
+
+
+* Page Cleaner Thread  
+
+​	协助 Master Thread 刷新脏页到磁盘的线程，它可以减轻 Master Thread 的工作压力，减少阻塞。  
+
+
+
+### redo log  
+
+（重做日志  ）
+
+* 作用：记录事务提交时数据页的物理修改，用来实现事务的持久性。  
+* 组成：
+  * 重做日志缓冲（redo log buffer）：在内存中  
+  * 重做日志文件（redo logfile）： 在磁盘中 。当事务提交之后会把所有修改信息都存到该日志文件中, 用于在刷新脏页到磁盘,发生错误时, 进行数据恢复使用。  
+
+* 工作过程：
+
+​	当对缓冲区的数据进行增删改之后，会首先将操作的数据页的变化，记录在redolog buffer中。在事务提交时，将redo log buffer中的数据刷新到redo log磁盘文件中。
+
+​	一段时间后，如果刷新缓冲区的脏页到磁盘时，发生错误，此时就可以借助于redo log进行数据恢复，这样就保证了事务的持久性。 
+
+​	而如果脏页成功刷新到磁盘 或 或者涉及到的数据已经落盘，此时redolog就没有作用了，就可以删除了，所以存在的两个redolog文件是循环写的。  
+
+![image-20220922211016930](C:\Users\22862\Desktop\笔记\MYSQL.assets\image-20220922211016930.png)
+
+
+
+>  为什么每一次提交事务，要刷新redo log 到磁盘中呢，而不是直接将buffer pool中的脏页刷新到磁盘呢 ?  
+
+
+
+​	我们操作数据一般都是随机读写磁盘的，而不是顺序读写磁盘。 而redo log在往磁盘文件中写入数据，由于是日志文件，所以都是顺序写的。顺序写的效率，要远大于随机写。 这种先写日志的方式，称之为 WAL（Write-Ahead Logging）。  
+
+
+
+### undo log  
+
+（回滚日志）
+
+* 作用：记录数据被修改前的信息 , 作用包含两个 : 提供回滚（保证事务的原子性）和MVCC（多版本并发控制）。  
+
+* 工作过程：undo log和redo log记录物理日志不一样，它是逻辑日志。可以认为当delete一条记录时，undo
+  log中会记录一条对应的insert记录，反之亦然。
+
+  ​    当执行rollback时，就可以从undo log中的逻辑记录读取到相应的内容并进行回滚。  
+
+  
+
+* 销毁：undo log在事务执行时产生，事务提交时，并不会立即删除undo log，因为这些
+  日志可能还用于MVCC。  
+* 存储：undo log采用段的方式进行管理和记录，存放在前面介绍的 rollback segment
+  回滚段中，内部包含1024个undo log segment。  
+
+
+
+​	而update、delete的时候，产生的undo log日志不仅在回滚时需要，在快照读时也需要，不会立即被删除。  
+
+
+
+* 版本链  
+
+​	不同事务或相同事务对同一条记录进行修改，会导致该记录的undolog生成一条记录版本链表，链表的头部是最新的旧记录，链表尾部是最早的旧记录。  
+
+![image-20220922214259477](C:\Users\22862\Desktop\笔记\MYSQL.assets\image-20220922214259477.png)
+
+### MVCC  
+
+​	
+
+* 当前读  ：
+
+​	读取的是记录的最新版本，读取时还要保证其他并发事务不能修改当前记录，会对读取的记录进行加锁。对于我们日常的操作，如：select ... lock in share mode(共享锁)，select ...for update、update、insert、delete(排他锁)都是一种当前读。  
+
+* 快照读 ：
+
+​	简单的select（不加锁）就是快照读，快照读，读取的是记录数据的可见版本，有可能是历史数据，不加锁，是非阻塞读。  
+
+
+
+* Read Committed：每次select，都生成一个快照读。  
+* Repeatable Read：开启事务后第一个select语句才是快照读的地方。 （保证了可重复读） 
+* Serializable：快照读会退化为当前读。  
+
+
+
+* MVCC  
+
+​	全称 Multi-Version Concurrency Control，多版本并发控制。指维护一个数据的多个版本，使得读写操作没有冲突，快照读为MySQL实现MVCC提供了一个非阻塞读功能。MVCC的具体实现，还需要依赖于数据库记录中的三个隐式字段、undo log日志、readView。  
+
+
+
+#### 隐藏字段  
+
+| 隐藏字段    | 含义                                                         |
+| ----------- | ------------------------------------------------------------ |
+| DB_TRX_ID   | 最近修改事务ID，记录插入这条记录或最后一次修改该记录的事务ID。 |
+| DB_ROLL_PTR | 回滚指针，指向这条记录的上一个版本，用于配合undo log，指向上一个版 本。 |
+| DB_ROW_ID   | 隐藏主键，如果表结构没有指定主键，将会生成该隐藏字段。       |
+
+
+
+#### ReadView 
+
+（读视图）
+
+​	快照读 SQL执行时MVCC提取数据的依据，记录并维护系统当前活跃的事务（未提交的）id。  
+
+
+
+​	ReadView中包含了四个核心字段：
+
+| 字段           | 含义                                                 |
+| -------------- | ---------------------------------------------------- |
+| m_ids          | 当前活跃的事务ID集合                                 |
+| min_trx_id     | 最小活跃事务ID                                       |
+| max_trx_id     | 预分配事务ID，当前最大事务ID+1（因为事务ID是自增的） |
+| creator_trx_id | ReadView创建者的事务ID                               |
+
+在readview中规定了版本链数据的访问规则：（trx_id 代表当前undolog版本链对应事务ID。）  
+
+| 条件                               | 是否可以访问                               | 说明                                        |
+| ---------------------------------- | ------------------------------------------ | ------------------------------------------- |
+| trx_id == creator_trx_id           | 可以访问该版本                             | 成立，说明数据是当前这个事 务更改的。       |
+| trx_id < min_trx_id                | 可以访问该版本                             | 成立，说明数据已经提交了。                  |
+| trx_id > max_trx_id                | 不可以访问该版本                           | 成立，说明该事务是在 ReadView生成后才开启。 |
+| min_trx_id <= trx_id <= max_trx_id | 如果trx_id不在m_ids中， 是可以访问该版本的 | 成立，说明数据已经提交。                    |
+
+* READ COMMITTED ：在事务中每一次执行快照读时生成ReadView。  
+* REPEATABLE READ：仅在事务中第一次执行快照读时生成ReadView，后续复用该ReadView。  
+
+
 
